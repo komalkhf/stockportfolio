@@ -32,7 +32,6 @@ def fetch_and_store_stock_data(request):
                 "open_price": price_data.get("o"),
                 "previous_close": price_data.get("pc"),
                 "timestamp": timestamp
-                "volume": price_data.get("v")
             }
 
             errors = bq_client.insert_rows_json(
