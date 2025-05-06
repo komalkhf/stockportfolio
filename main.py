@@ -14,7 +14,7 @@ fs_client = firestore.Client()
 gcs_client = storage.Client()
 
 def fetch_and_store_stock_data(request):
-    timestamp = datetime.utcnow().isoformat() +"Z"
+    timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
     tickers_list = TICKERS.split(',')
 
     #  Stock Price Data Block
