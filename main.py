@@ -3,12 +3,12 @@ import json
 from google.cloud import bigquery, firestore, storage
 from datetime import datetime, timedelta
 
-# --- FINNHUB Config ---
+# FINNHUB Config 
 FINNHUB_API_KEY = 'd0avurhr01qlq65q0280d0avurhr01qlq65q028g'
 TICKERS = "SCHD,SCHG,NVDA,MSFT,LLY"
 GCS_BUCKET = 'fpkkhawaja'
 
-# --- GCP Clients ---
+# GCP Clients
 bq_client = bigquery.Client()
 fs_client = firestore.Client()
 gcs_client = storage.Client()
@@ -17,7 +17,7 @@ def fetch_and_store_stock_data(request):
     timestamp = datetime.utcnow().isoformat()
     tickers_list = TICKERS.split(',')
 
-    # --- Stock Price Data Block ---
+    #  Stock Price Data Block
     try:
         for ticker in tickers_list:
             price_url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
@@ -31,14 +31,18 @@ def fetch_and_store_stock_data(request):
                 "low_price": price_data.get("l"),
                 "open_price": price_data.get("o"),
                 "previous_close": price_data.get("pc"),
-                "timestamp": timestamp,
+                "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
                 "volume": price_data.get("v")
             }
 
-            bq_client.insert_rows_json(
+            errors = bq_client.insert_rows_json(
                 'sp25-i535-kkhawaja-portfolio.stock_data.stock_price',
                 [stock_payload]
             )
+            if errors:
+                print(f"[ERROR] BQ insert failed for {ticker}: {errors}")
+            else:
+                print(f"[INFO] Inserted stock_price for {ticker}")
 
             fs_client.collection('logs').add({
                 "source": "stock_price",
@@ -47,13 +51,14 @@ def fetch_and_store_stock_data(request):
             })
 
     except Exception as e:
+        print(f"[EXCEPTION] stock_price block failed: {e}")
         fs_client.collection('logs').add({
             "source": "stock_price",
             "status": "error",
             "error": str(e)
         })
 
-    # --- Stock News Data Block (Last 7 Days) ---
+    # Stock News Data 
     try:
         today = datetime.utcnow().date()
         seven_days_ago = today - timedelta(days=7)
@@ -82,6 +87,7 @@ def fetch_and_store_stock_data(request):
             })
 
     except Exception as e:
+        print(f"[EXCEPTION] stock_news block failed: {e}")
         fs_client.collection('logs').add({
             "source": "stock_news",
             "status": "error",
