@@ -31,7 +31,7 @@ def fetch_and_store_stock_data(request):
                 "low_price": price_data.get("l"),
                 "open_price": price_data.get("o"),
                 "previous_close": price_data.get("pc"),
-                "timestamp": datetime.utcnow().strftime("%H:%M:%S"),
+                "timestamp": timestamp
                 "volume": price_data.get("v")
             }
 
