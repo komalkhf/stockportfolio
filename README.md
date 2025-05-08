@@ -1,4 +1,4 @@
-# Weather Data Pipeline using Google Cloud Platform
+# Real-time Stock Data Pipeline using Google Cloud Platform
 
 ## Overview
 
@@ -18,11 +18,6 @@ We have ingested portfolio as a csv in bucket and used it in bigquery for analys
 
 
 ## Features
-
-* **Scheduled data collection** every minute using Cloud Scheduler
-* **Data cleaning & validation** in Cloud Function
-* **Storage in BigQuery** for analytics
-* **Storage in Firestore** for logging and debugging
 * **Auto-scaling and serverless setup**
 * **Public API data ingestion**Finnhub API
 
@@ -35,6 +30,7 @@ We have ingested portfolio as a csv in bucket and used it in bigquery for analys
 ```bash
 gcloud services enable cloudfunctions.googleapis.com \
     firestore.googleapis.com \
+    cloudstorage.googleapis.com\
     bigquery.googleapis.com \
     cloudscheduler.googleapis.com
 ```
@@ -51,7 +47,7 @@ gcloud services enable cloudfunctions.googleapis.com \
 gcloud functions deploy fetch_and_store_stock_data \
   --runtime python310 \
   --trigger-http \
-  --entry-point fetch_and_store_weather \
+  --entry-point fetch_and_store_stock_data \
   --region=us-central1 \
   --allow-unauthenticated
 ```
@@ -61,7 +57,7 @@ gcloud functions deploy fetch_and_store_stock_data \
 ```bash
 gcloud scheduler jobs create http fetch-stock_data-job \
   --schedule="*0 * * * *" \
-  --uri="https://us-central1-.cloudfunctions.net/fetch_and_store_weather" \
+  --uri="https://us-central1-.cloudfunctions.net/fetch_and_store_stock_data" \
   --http-method=GET \
   --location=us-central1 \
   --time-zone="UTC"
@@ -164,7 +160,7 @@ def fetch_and_store_stock_data(request):
             "error": str(e)
         })
 
-    return ("✅ Stock Price + News Pipeline Completed", 200)
+    return ("Stock Price + News Pipeline Completed", 200)
 
 
 
@@ -180,6 +176,7 @@ weather-data-pipeline/
 ## Future Improvements
 
 * Use Secret Manager for API keys
+* SQL queries and Looker Studio automation
 
 
 
