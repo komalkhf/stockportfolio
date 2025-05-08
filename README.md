@@ -2,17 +2,20 @@
 
 ## Overview
 
-This project automates the process of fetching real-time weather data from OpenWeatherMap API and stores it in Google BigQuery and Firestore using Google Cloud Functions and Cloud Scheduler.
+This project automates the ingestion of real-time stock prices data and news data from Finnhub API and stores it in Google BigQuery, Firestore and Google cloud storage using Google Cloud Functions and Cloud Scheduler.
+
+Data is fetched at 5-minutes intervals during pre-market, market hours and after-hours trading on weekdays using Cloud Scheduler to trigger Cloud Function.
+
+We have ingested portfolio as a csv in bucket and used it in bigquery for analysis and visualization in looker studio.
+
 
 ## Architecture
 
-```mermaid
-graph TD
     A[Cloud Scheduler (1-minute cron)] --> B[Cloud Function: fetch_and_store_weather]
     B --> C[OpenWeatherMap API]
     B --> D[Firestore (logs)]
     B --> E[BigQuery (weather_stream table)]
-```
+
 
 ## Features
 
@@ -21,16 +24,9 @@ graph TD
 * **Storage in BigQuery** for analytics
 * **Storage in Firestore** for logging and debugging
 * **Auto-scaling and serverless setup**
-* **Public API data ingestion**
+* **Public API data ingestion**Finnhub API
 
-## Tools and Services Used
 
-* Google Cloud Platform (GCP)
-* Cloud Functions (Gen 1)
-* Cloud Scheduler
-* BigQuery (Distributed storage/processing)
-* Firestore (NoSQL database)
-* OpenWeatherMap API (External data source)
 
 ## Setup Instructions
 
@@ -45,26 +41,14 @@ gcloud services enable cloudfunctions.googleapis.com \
 
 ### 2. Create BigQuery Dataset and Table
 
-```sql
-CREATE DATASET IF NOT EXISTS weather_data;
-CREATE TABLE IF NOT EXISTS weather_data.weather_stream (
-    city STRING,
-    temperature FLOAT64,
-    humidity INT64,
-    pressure INT64,
-    wind_speed FLOAT64,
-    timestamp TIMESTAMP
-);
-```
 
 ### 3. Create Firestore Database
 
-Use Firestore in Native mode.
 
 ### 4. Deploy the Cloud Function
 
 ```bash
-gcloud functions deploy fetch_and_store_weather \
+gcloud functions deploy fetch_and_store_stock_data \
   --runtime python310 \
   --trigger-http \
   --entry-point fetch_and_store_weather \
@@ -75,7 +59,7 @@ gcloud functions deploy fetch_and_store_weather \
 ### 5. Create the Scheduler Job
 
 ```bash
-gcloud scheduler jobs create http fetch-weather-job \
+gcloud scheduler jobs create http fetch-stock_data-job \
   --schedule="*0 * * * *" \
   --uri="https://us-central1-.cloudfunctions.net/fetch_and_store_weather" \
   --http-method=GET \
@@ -85,50 +69,104 @@ gcloud scheduler jobs create http fetch-weather-job \
 
 ## Cloud Function Code (`main.py`)
 
-```python
 import requests
 import json
-from google.cloud import bigquery, firestore
-from datetime import datetime
+from google.cloud import bigquery, firestore, storage
+from datetime import datetime, timedelta
 
-API_KEY = 'd9b627d91ab4a26e7789d9e606d74593'
-CITY = 'Karachi'
+# FINNHUB Config 
+FINNHUB_API_KEY = 'd0avurhr01qlq65q0280d0avurhr01qlq65q028g'
+TICKERS = "SCHD,SCHG,NVDA,MSFT,LLY"
+GCS_BUCKET = 'fpkkhawaja'
 
+# GCP Clients
 bq_client = bigquery.Client()
 fs_client = firestore.Client()
+gcs_client = storage.Client()
 
-def fetch_and_store_weather(request):
+def fetch_and_store_stock_data(request):
+    timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
+    tickers_list = TICKERS.split(',')
+
+    #  Stock Price Data Block
     try:
-        url = f"https://api.openweathermap.org/data/2.5/weather?q={CITY}&appid={API_KEY}&units=metric"
-        res = requests.get(url)
-        weather_data = res.json()
+        for ticker in tickers_list:
+            price_url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
+            price_res = requests.get(price_url)
+            price_data = price_res.json()
 
-        data = {
-            "city": CITY,
-            "temperature": weather_data["main"]["temp"],
-            "humidity": weather_data["main"]["humidity"],
-            "pressure": weather_data["main"]["pressure"],
-            "wind_speed": weather_data["wind"]["speed"],
-            "timestamp": datetime.utcnow().isoformat()
-        }
+            stock_payload = {
+                "symbol": ticker,
+                "current_price": price_data.get("c"),
+                "high_price": price_data.get("h"),
+                "low_price": price_data.get("l"),
+                "open_price": price_data.get("o"),
+                "previous_close": price_data.get("pc"),
+                "timestamp": timestamp
+            }
 
-        table_id = 'sp25-i535-kkhawaja-portfolio.weather_data.weather_stream'
-        bq_client.insert_rows_json(table_id, [data])
+            errors = bq_client.insert_rows_json(
+                'sp25-i535-kkhawaja-portfolio.stock_data.stock_price',
+                [stock_payload]
+            )
+            if errors:
+                print(f"[ERROR] BQ insert failed for {ticker}: {errors}")
+            else:
+                print(f"[INFO] Inserted stock_price for {ticker}")
 
-        fs_client.collection('logs').add({
-            "status": "inserted",
-            "data": data
-        })
-
-        return ("Success", 200)
+            fs_client.collection('logs').add({
+                "source": "stock_price",
+                "status": "inserted",
+                "data": stock_payload
+            })
 
     except Exception as e:
+        print(f"[EXCEPTION] stock_price block failed: {e}")
         fs_client.collection('logs').add({
+            "source": "stock_price",
             "status": "error",
             "error": str(e)
         })
-        return ("Error", 500)
-```
+
+    # Stock News Data 
+    try:
+        today = datetime.utcnow().date()
+        seven_days_ago = today - timedelta(days=7)
+        from_date = seven_days_ago.isoformat()
+        to_date = today.isoformat()
+
+        for ticker in tickers_list:
+            news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={from_date}&to={to_date}&token={FINNHUB_API_KEY}"
+            news_res = requests.get(news_url)
+            news_data = news_res.json()
+
+            gcs_filename = f"stock_news_{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
+            bucket = gcs_client.bucket(GCS_BUCKET)
+            blob = bucket.blob(gcs_filename)
+
+            blob.upload_from_string(
+                data=json.dumps(news_data),
+                content_type='application/json'
+            )
+
+            fs_client.collection('logs').add({
+                "source": "stock_news",
+                "status": "uploaded",
+                "filename": gcs_filename,
+                "timestamp": timestamp
+            })
+
+    except Exception as e:
+        print(f"[EXCEPTION] stock_news block failed: {e}")
+        fs_client.collection('logs').add({
+            "source": "stock_news",
+            "status": "error",
+            "error": str(e)
+        })
+
+    return ("✅ Stock Price + News Pipeline Completed", 200)
+
+
 
 ## Repository Structure
 
@@ -142,9 +180,7 @@ weather-data-pipeline/
 ## Future Improvements
 
 * Use Secret Manager for API keys
-* Add retry & dead letter topics
-* Visualization dashboard in Data Studio or Looker
 
-## Author
+
 
 
