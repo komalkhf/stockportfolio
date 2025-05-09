@@ -93,4 +93,4 @@ def fetch_and_store_stock_data(request):
             "error": str(e)
         })
 
-    return ("✅ Stock Price + News Pipeline Completed", 200)
+    return ("Stock Price + News Pipeline Completed", 200)
