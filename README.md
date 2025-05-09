@@ -2,46 +2,72 @@
 
 ## Overview
 
-This project automates the ingestion of real-time stock prices data and news data from Finnhub API and stores it in Google BigQuery, Firestore and Google cloud storage using Google Cloud Functions and Cloud Scheduler.
-
-Data is fetched at 5-minutes intervals during pre-market, market hours and after-hours trading on weekdays using Cloud Scheduler to trigger Cloud Function.
-
-We have ingested portfolio as a csv in bucket and used it in bigquery for analysis and visualization in looker studio.
+This project automates the ingestion of **real-time stock prices**, **portfolio data** (structured), and **news data** (unstructured) from the [Finnhub API](https://finnhub.io), storing them into **Google BigQuery**, **Firestore**, and **Cloud Storage** using serverless GCP services. Visualization is done via **Looker Studio** dashboards.
 
 
-## Architecture
+## Project Overview
 
-    A[Cloud Scheduler (1-minute cron)] --> B[Cloud Function: fetch_and_store_weather]
-    B --> C[OpenWeatherMap API]
-    B --> D[Firestore (logs)]
-    B --> E[BigQuery (weather_stream table)]
+## Key Features
 
-
-## Features
-* **Auto-scaling and serverless setup**
-* **Public API data ingestion**Finnhub API
-
+- Real-time stock & news data ingestion using **Cloud Functions** + **Cloud Scheduler**
+- **CSV portfolio data** upload and analysis in BigQuery
+- **Unstructured news data** storage in Cloud Storage (JSON)
+- **NoSQL logs** stored in Firestore
+- Dynamic dashboards built in **Looker Studio**
+- Completely serverless and scalable setup on Google Cloud
 
 
 ## Setup Instructions
 
 ### 1. Enable Required APIs
+Enable the following in **API Library**:
+- Cloud Storage
+- Firestore
+- BigQuery
+- Cloud Functions
+- Cloud Scheduler
 
-```bash
-gcloud services enable cloudfunctions.googleapis.com \
-    firestore.googleapis.com \
-    cloudstorage.googleapis.com\
-    bigquery.googleapis.com \
-    cloudscheduler.googleapis.com
-```
+### 2.IAM Roles
+Ensure your IAM roles are set up for:
+- Developer Account
+- Service Account (Invoker for Cloud Functions)
+
+## Pipeline Implementation Steps
+
+### 1. Cloud Storage (News & Portfolio CSV)
+Create bucket:
+Bucket Name: kpkkhawaja
+Region: us-central1
+Upload portfolio data as CSV and fetch news data via Cloud Function to JSON.
 
 ### 2. Create BigQuery Dataset and Table
+Fetch real time stock price data from API using cloud function and load to BigQuery.
+Create:
+Dataset: stock_data
+Table: stock_price with appropriate schema.
 
+Upload portfolio CSV from bucket.
+Create:
+Dataset: stock_data
+Table:portfolio with appropriate schema
 
 ### 3. Create Firestore Database
+Create Firestore in Native mode (Region: us-central1). Logs from Cloud Function will be stored here automatically.
 
+### 4. Create the Scheduler Job
+Schedule job to run every 5 minutes on weekdays during market trading time:
+```bash
+gcloud scheduler jobs create http fetch-stock_data-job \
+  --schedule="*/5 * * * 1-5" \
+  --uri="https://us-central1-.cloudfunctions.net/fetch_and_store_stock_data" \
+  --http-method=GET \
+  --location=us-central1 \
+  --time-zone="UTC"
+```
 
-### 4. Deploy the Cloud Function
+### 5. Cloud Function Code (`main.py`)
+
+### 6. Deploy the Cloud Function
 
 ```bash
 gcloud functions deploy fetch_and_store_stock_data \
@@ -52,132 +78,26 @@ gcloud functions deploy fetch_and_store_stock_data \
   --allow-unauthenticated
 ```
 
-### 5. Create the Scheduler Job
+### 7.Data analysis in BigQuery
+Perform data analysis using SQL
 
-```bash
-gcloud scheduler jobs create http fetch-stock_data-job \
-  --schedule="*0 * * * *" \
-  --uri="https://us-central1-.cloudfunctions.net/fetch_and_store_stock_data" \
-  --http-method=GET \
-  --location=us-central1 \
-  --time-zone="UTC"
-```
+### 8.Data Visualization in Looker
+Perform data visualization in Looker
 
-## Cloud Function Code (`main.py`)
-
-import requests
-import json
-from google.cloud import bigquery, firestore, storage
-from datetime import datetime, timedelta
-
-# FINNHUB Config 
-FINNHUB_API_KEY = 'd0avurhr01qlq65q0280d0avurhr01qlq65q028g'
-TICKERS = "SCHD,SCHG,NVDA,MSFT,LLY"
-GCS_BUCKET = 'fpkkhawaja'
-
-# GCP Clients
-bq_client = bigquery.Client()
-fs_client = firestore.Client()
-gcs_client = storage.Client()
-
-def fetch_and_store_stock_data(request):
-    timestamp = datetime.utcnow().replace(microsecond=0).isoformat()
-    tickers_list = TICKERS.split(',')
-
-    #  Stock Price Data Block
-    try:
-        for ticker in tickers_list:
-            price_url = f"https://finnhub.io/api/v1/quote?symbol={ticker}&token={FINNHUB_API_KEY}"
-            price_res = requests.get(price_url)
-            price_data = price_res.json()
-
-            stock_payload = {
-                "symbol": ticker,
-                "current_price": price_data.get("c"),
-                "high_price": price_data.get("h"),
-                "low_price": price_data.get("l"),
-                "open_price": price_data.get("o"),
-                "previous_close": price_data.get("pc"),
-                "timestamp": timestamp
-            }
-
-            errors = bq_client.insert_rows_json(
-                'sp25-i535-kkhawaja-portfolio.stock_data.stock_price',
-                [stock_payload]
-            )
-            if errors:
-                print(f"[ERROR] BQ insert failed for {ticker}: {errors}")
-            else:
-                print(f"[INFO] Inserted stock_price for {ticker}")
-
-            fs_client.collection('logs').add({
-                "source": "stock_price",
-                "status": "inserted",
-                "data": stock_payload
-            })
-
-    except Exception as e:
-        print(f"[EXCEPTION] stock_price block failed: {e}")
-        fs_client.collection('logs').add({
-            "source": "stock_price",
-            "status": "error",
-            "error": str(e)
-        })
-
-    # Stock News Data 
-    try:
-        today = datetime.utcnow().date()
-        seven_days_ago = today - timedelta(days=7)
-        from_date = seven_days_ago.isoformat()
-        to_date = today.isoformat()
-
-        for ticker in tickers_list:
-            news_url = f"https://finnhub.io/api/v1/company-news?symbol={ticker}&from={from_date}&to={to_date}&token={FINNHUB_API_KEY}"
-            news_res = requests.get(news_url)
-            news_data = news_res.json()
-
-            gcs_filename = f"stock_news_{ticker}_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.json"
-            bucket = gcs_client.bucket(GCS_BUCKET)
-            blob = bucket.blob(gcs_filename)
-
-            blob.upload_from_string(
-                data=json.dumps(news_data),
-                content_type='application/json'
-            )
-
-            fs_client.collection('logs').add({
-                "source": "stock_news",
-                "status": "uploaded",
-                "filename": gcs_filename,
-                "timestamp": timestamp
-            })
-
-    except Exception as e:
-        print(f"[EXCEPTION] stock_news block failed: {e}")
-        fs_client.collection('logs').add({
-            "source": "stock_news",
-            "status": "error",
-            "error": str(e)
-        })
-
-    return ("Stock Price + News Pipeline Completed", 200)
+### Results
+Real-time, automated ingestion of stock data
+Scalable and efficient ETL pipeline
+Unified analysis of structured and unstructured financial data
+Insights on top/bottom performers, sector allocation, and portfolio value
+Custom dashboard for stakeholders in Looker Studio
 
 
-
-## Repository Structure
-
-```
-weather-data-pipeline/
-├── cloud-function/
-│   └── main.py
-├── README.md
-```
 
 ## Future Improvements
 
 * Use Secret Manager for API keys
-* SQL queries and Looker Studio automation
-
+* Automate SQL queries execution and Looker Studio updates
+* Integrate sentiment analysis on news data
 
 
 
